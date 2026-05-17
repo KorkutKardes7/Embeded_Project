@@ -1,5 +1,7 @@
 #include <Arduino.h>
-
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
 #include <SPI.h>
 #include <LoRa.h>
 
@@ -71,6 +73,12 @@ void onReceive(int packetSize) {
 
 void setup() {
   Serial.begin(9600);                   // initialize serial
+  bool status = bme.begin(0x76);
+
+  if (!status) {
+    Serial.println("BME280 bulunamadi!");
+    while (1);
+  }
   while (!Serial);
 
   Serial.println("LoRa Duplex with callback");
