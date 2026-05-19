@@ -75,13 +75,17 @@ void postTelemetry(float airTemperature, float soilTemperature, float soilMoistu
 
 
 void sendMessage(String outgoing) {
-  LoRa.beginPacket();                   // start packet
+  if(!LoRa.beginPacket()){                   // start packet
+    Serial.println("error beginning packet!");
+  }
   LoRa.write(destination);              // add destination address
   LoRa.write(localAddress);             // add sender address
   LoRa.write(msgCount);                 // add message ID
   LoRa.write(outgoing.length());        // add payload length
   LoRa.print(outgoing);                 // add payload
-  LoRa.endPacket();                     // finish packet and send it
+  if(!LoRa.endPacket()){                     // finish packet and send it
+    Serial.println("error ending packet!");
+  }
   msgCount++;                           // increment message ID
 }
 
@@ -151,14 +155,16 @@ void setup() {
 }
 
 void loop() {
+  /*
   if (millis() - lastSendTime > interval) {
-    String message = "HeLoRa World!";   // send a message
+    String message = "Message from LoL1n esp8266!";   // send a message
     sendMessage(message);
     Serial.println("Sending " + message);
     lastSendTime = millis();            // timestamp the message
-    interval = random(2000) + 1000;     // 2-3 seconds
+    interval = random(2000) + 3000;     // 2-3 seconds
     LoRa.receive();                     // go back into receive mode
   }
+  */
 
   if (millis() - lastPostTime > postIntervalMs) {
     lastPostTime = millis();
