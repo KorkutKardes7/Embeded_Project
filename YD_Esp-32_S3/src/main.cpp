@@ -6,14 +6,14 @@
 #include <LoRa.h>
 
 #define NSS  10
-#define RST  9
-#define DIO0 2
+#define RST  4
+#define DIO0 5
 
 Adafruit_BME280 bme;
 
 String outgoing;              // outgoing message
 byte msgCount = 0;            // count of outgoing messages
-byte localAddress = 0xBC;     // address of this device
+byte localAddress = 0xBA;     // address of this device
 byte destination = 0xFF;      // destination to send to
 long lastSendTime = 0;        // last send time
 int interval = 2000;          // interval between sends
@@ -66,7 +66,7 @@ void onReceive(int packetSize) {
   Serial.println("Message length: " + String(incomingLength));
   Serial.println("Message: " + incoming);
   Serial.println("RSSI: " + String(LoRa.packetRssi()));
-  Serial.println("Snr: " + String(LoRa.packetSnr()));
+  //Serial.println("Snr: " + String(LoRa.packetSnr())); //CRASH!!!
   Serial.println();
 }
 
@@ -75,6 +75,15 @@ void onReceive(int packetSize) {
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
+  Serial.print("MOSI: ");
+  Serial.println(MOSI);
+  Serial.print("MISO: ");
+  Serial.println(MISO);
+  Serial.print("SCK: ");
+  Serial.println(SCK);
+  Serial.print("SS: ");
+  Serial.println(SS);
 
   bool status = bme.begin(0x76);
 
@@ -85,7 +94,7 @@ void setup() {
 
   Serial.println("LoRa Duplex with callback");
 
-  // override the default CS, reset, and IRQ pins (optional)
+  // override the default CS, reset, and IRQ pins
   LoRa.setPins(NSS, RST, DIO0);// set CS, reset, IRQ pin
 
   if (!LoRa.begin(433E6)) {             // initialize ratio at 433 MHz

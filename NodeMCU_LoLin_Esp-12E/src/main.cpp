@@ -155,16 +155,16 @@ void setup() {
 }
 
 void loop() {
-  /*
+  
   if (millis() - lastSendTime > interval) {
     String message = "Message from LoL1n esp8266!";   // send a message
     sendMessage(message);
     Serial.println("Sending " + message);
     lastSendTime = millis();            // timestamp the message
-    interval = random(2000) + 3000;     // 2-3 seconds
+    interval = random(2000) + 1000;     // 2-3 seconds
     LoRa.receive();                     // go back into receive mode
   }
-  */
+  
 
   if (millis() - lastPostTime > postIntervalMs) {
     lastPostTime = millis();
