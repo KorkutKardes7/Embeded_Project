@@ -19,13 +19,17 @@ int interval = 2000;          // interval between sends
 
 
 void sendMessage(String outgoing) {
-  LoRa.beginPacket();                   // start packet
+  if(!LoRa.beginPacket()){                   // start packet
+    Serial.println("error beginning packet!");
+  }
   LoRa.write(destination);              // add destination address
   LoRa.write(localAddress);             // add sender address
   LoRa.write(msgCount);                 // add message ID
   LoRa.write(outgoing.length());        // add payload length
   LoRa.print(outgoing);                 // add payload
-  LoRa.endPacket();                     // finish packet and send it
+  if(!LoRa.endPacket()){                     // finish packet and send it
+    Serial.println("error ending packet!");
+  }
   msgCount++;                           // increment message ID
 }
 
@@ -73,20 +77,24 @@ void onReceive(int packetSize) {
 
 void setup() {
   Serial.begin(9600);                   // initialize serial
-  bool status = bme.begin(0x76);
+  //bool status = bme.begin(0x76);
 
+  /*
   if (!status) {
     Serial.println("BME280 bulunamadi!");
     while (1);
   }
+  */
   while (!Serial);
 
   Serial.println("LoRa Duplex with callback");
 
+  //LoRa.setSPIFrequency(1E3); //set the spi bus speed to 1KHz. The logic level converter sucks.
+
   // override the default CS, reset, and IRQ pins (optional)
   LoRa.setPins(NSS, RST, DIO0);// set CS, reset, IRQ pin
 
-  if (!LoRa.begin(433E6)) {             // initialize ratio at 915 MHz
+  if (!LoRa.begin(433E6)) {             // initialize ratio at 433 MHz
     Serial.println("LoRa init failed. Check your connections.");
     while (true);                       // if failed, do nothing
   }
@@ -98,11 +106,11 @@ void setup() {
 
 void loop() {
   if (millis() - lastSendTime > interval) {
-    String message = "HeLoRa World!";   // send a message
+    String message = "Message from arduino Nano!";   // send a message
     sendMessage(message);
     Serial.println("Sending " + message);
     lastSendTime = millis();            // timestamp the message
-    interval = random(2000) + 1000;     // 2-3 seconds
+    interval = random(2000) + 3000;     // 
     LoRa.receive();                     // go back into receive mode
   }
 }
