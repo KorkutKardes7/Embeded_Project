@@ -7,9 +7,28 @@
 #include <LoRa.h>
 
 byte deviceAddress;
+static String latestPayload = "";
+static bool hasNewPayload = false;
+static unsigned long latestPayloadMillis = 0;
 
 void setDeviceAddress(byte address){
   deviceAddress = address;
+}
+
+bool loraHasNewPayload() {
+  return hasNewPayload;
+}
+
+String loraGetLatestPayload() {
+  return latestPayload;
+}
+
+void loraMarkPayloadSent() {
+  hasNewPayload = false;
+}
+
+unsigned long loraLatestPayloadTime() {
+  return latestPayloadMillis;
 }
 
 void sendString(
@@ -25,7 +44,7 @@ void sendString(
   LoRa.write(outgoing.length());        // add payload length
   LoRa.print(outgoing);                 // add payload
   LoRa.endPacket();                     // finish packet and send it
-  *msgCount++;                          // increment message ID
+  *(msgCount)++;                          // increment message ID
 }
 
 void onStringReceive(int packetSize) {
@@ -65,4 +84,8 @@ void onStringReceive(int packetSize) {
   Serial.println("RSSI: " + String(LoRa.packetRssi()));
   //Serial.println("Snr: " + String(LoRa.packetSnr())); //causes a crash on esp32. 
   Serial.println();
+
+  latestPayload = incoming;
+  latestPayloadMillis = millis();
+  hasNewPayload = true;
 }

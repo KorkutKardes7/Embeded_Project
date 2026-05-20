@@ -40,14 +40,6 @@ unsigned long last_post_time = 0;
 const unsigned long POST_INTERVAL = 15000; // Post every 15 seconds
 bool loraReady = false;
 
-void updateSensorReadings()
-{
-  // Replace with real sensor reads when hardware is connected.
-  temperature = 18.0 + ((millis() / 1000) % 40) * 0.1;
-  humidity = 45.0 + ((millis() / 900) % 30) * 0.1;
-  pressure = 1010.0 + ((millis() / 1100) % 20) * 0.1;
-}
-
 bool extractThreeFloats(const String &input, float *outValues)
 {
   size_t count = 0;
@@ -238,10 +230,6 @@ void fetchLatestData()
   }
   http.end();
 }
-
-// Web page handlers
-// Root page handler
-// Page handlers are moved to include/page_handlers.h and src/page_handlers.cpp
 
 void setup()
 {
