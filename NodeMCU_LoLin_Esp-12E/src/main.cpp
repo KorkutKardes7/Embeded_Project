@@ -10,10 +10,8 @@
 
 #include "loraHelper.h"
 
-
-
-#define NSS  D8
-#define RST  D3
+#define NSS D8
+#define RST D3
 #define DIO0 D2
 
 String outgoing;          // outgoing message
@@ -140,9 +138,10 @@ void sendSensorData()
   http.end();
 }
 
-
-void fetchLatestData() {
-  if (!WiFi.isConnected()) {
+void fetchLatestData()
+{
+  if (!WiFi.isConnected())
+  {
     Serial.println("[GET] Not connected, skip");
     return;
   }
@@ -152,20 +151,27 @@ void fetchLatestData() {
   Serial.println(url);
 
   HTTPClient http;
-  http.begin(url);
+  WiFiClient client;
+  http.begin(client, url);
   int code = http.GET();
 
-  if (code > 0) {
+  if (code > 0)
+  {
     Serial.print("[GET] HTTP code: ");
     Serial.println(code);
     String response = http.getString();
     Serial.print("[GET] Response (first 200 chars): ");
-    if (response.length() > 200) {
+    if (response.length() > 200)
+    {
       Serial.println(response.substring(0, 200));
-    } else {
+    }
+    else
+    {
       Serial.println(response);
     }
-  } else {
+  }
+  else
+  {
     Serial.print("[GET] Failed: ");
     Serial.println(http.errorToString(code).c_str());
   }
@@ -178,7 +184,7 @@ void handleRoot()
 {
   // Scan for nearby WiFi networks (requires AP+STA mode)
   WiFi.mode(WIFI_AP_STA);
-  int n = WiFi.scanNetworks(); //gives network count
+  int n = WiFi.scanNetworks(); // gives network count
 
   String html = "<!DOCTYPE html><html lang=\"tr\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">";
   html += "<title>ESP32 WiFi Setup</title>";
@@ -187,19 +193,27 @@ void handleRoot()
   html += "<p class=\"muted\">ESP is in AP mode. Select the network and enter password to connect.</p>";
   html += "<form method=\"POST\" action=\"/connect\">";
 
-  if (n <= 0) {
+  if (n <= 0)
+  {
     html += "<p class=\"small\">No networks found</p>";
-  } else {
+  }
+  else
+  {
     html += "<div class=\"small\"><b>Available Networks:</b></div>";
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < n; ++i)
+    {
       String item = WiFi.SSID(i);
       int rssi = WiFi.RSSI(i);
       String enc = (WiFi.encryptionType(i) == 0) ? "Open" : "Secured"; // I solved it in worst way possible look at encryption types
       String sig = "";
-      if (rssi >= -50) sig = "▂▄▆█";
-      else if (rssi >= -60) sig = "▂▄▆";
-      else if (rssi >= -70) sig = "▂▄";
-      else sig = "▂";
+      if (rssi >= -50)
+        sig = "▂▄▆█";
+      else if (rssi >= -60)
+        sig = "▂▄▆";
+      else if (rssi >= -70)
+        sig = "▂▄";
+      else
+        sig = "▂";
       html += "<label class=\"net\"><span><input type=\"radio\" name=\"ssid\" value=\"" + item + "\">" + item + " <span class=\"muted\">" + enc + "</span></span><span class=\"sig\">" + sig + "</span></label>";
     }
   }
@@ -210,8 +224,9 @@ void handleRoot()
 
   server.send(200, "text/html; charset=UTF-8", html);
 }
-//Board test page handler
-void handleTestStatus() {
+// Board test page handler
+void handleTestStatus()
+{
   String json = "{";
   json += "\"wifi\":\"" + String(WiFi.isConnected() ? "connected" : "disconnected") + "\",";
   json += "\"ssid\":\"" + String(WiFi.SSID()) + "\",";
@@ -233,7 +248,8 @@ void handleConnect()
   Serial.print("Requested connect to: ");
   Serial.println(targetSsid);
 
-  if (targetSsid.length() == 0) {
+  if (targetSsid.length() == 0)
+  {
     server.send(400, "text/plain", "Missing SSID");
     return;
   }
@@ -248,13 +264,15 @@ void handleConnect()
   Serial.print("Connecting to target WiFi");
   unsigned long start = millis();
   const unsigned long timeout = 20000; // 20s
-  while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeout) {
+  while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeout)
+  {
     delay(500);
     Serial.print('.');
   }
   Serial.println();
 
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED)
+  {
     IPAddress ip = WiFi.localIP();
     Serial.print("Connected, IP: ");
     Serial.println(ip);
@@ -268,8 +286,9 @@ void handleConnect()
     Serial.print("[AP] IP: ");
     Serial.println(apIP);
     Serial.println("[CONNECT] Ready to send sensor data to FastAPI");
-
-  } else {
+  }
+  else
+  {
     Serial.println("[CONNECT] Failed. Keeping AP for retry.");
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(ESP_SSID, ESP_PASSWORD);
@@ -279,37 +298,45 @@ void handleConnect()
   }
 }
 // Fastapi connection test handler
-void handleTestConnect() {
+void handleTestConnect()
+{
   Serial.println("[CONN_TEST] Testing connection to FastAPI...");
   String url = "http://" + String(lAPTOP_IP) + ":" + String(FASTAPI_PORT) + "/";
-  Serial.print("[CONN_TEST] URL: "); Serial.println(url);
-  
+  Serial.print("[CONN_TEST] URL: ");
+  Serial.println(url);
+
   HTTPClient http;
   WiFiClient client;
   http.setTimeout(3000);
   http.begin(client, url);
   int code = http.GET();
-  
+
   String result = "{\"test\":\"connection\",";
-  if (code > 0) {
+  if (code > 0)
+  {
     result += "\"status\":\"success\",\"code\":" + String(code);
     Serial.println("[CONN_TEST] SUCCESS - Server is reachable!");
-  } else {
+  }
+  else
+  {
     result += "\"status\":\"failed\",\"error\":\"" + http.errorToString(code) + "\"";
-    Serial.print("[CONN_TEST] FAILED - "); Serial.println(http.errorToString(code).c_str());
+    Serial.print("[CONN_TEST] FAILED - ");
+    Serial.println(http.errorToString(code).c_str());
   }
   http.end();
   result += "}";
-  
+
   server.send(200, "application/json", result);
 }
 // Test endpoints for validation
-void handleTestPost() {
+void handleTestPost()
+{
   Serial.println("[TEST] POST /test-post triggered");
   sendSensorData();
   server.send(200, "application/json", "{\"status\":\"posted\",\"air_temperature\":" + String(temperature, 1) + ",\"soil_temperature\":" + String(humidity, 1) + ",\"soil_moisture\":" + String(pressure, 1) + "}");
 }
-void handleTestGet() {
+void handleTestGet()
+{
   Serial.println("[TEST] GET /test-get triggered");
   fetchLatestData();
   server.send(200, "application/json", "{\"status\":\"fetched\"}");
@@ -318,7 +345,8 @@ void handleTestGet() {
 void setup()
 {
   Serial.begin(9600); // initialize serial
-  while (!Serial);
+  while (!Serial)
+    ;
 
   Serial.println("WiFi Starting...");
   WiFi.softAP(ESP_SSID, ESP_PASSWORD);
@@ -351,8 +379,8 @@ void setup()
 
   setDeviceAddress(localAddress);
 
-
-  if (!LoRa.begin(433E6)) {             // initialize ratio at 433 MHz
+  if (!LoRa.begin(433E6))
+  { // initialize ratio at 433 MHz
     Serial.println("LoRa init failed. Check your connections.");
     while (true)
       ; // if failed, do nothing
@@ -366,10 +394,12 @@ void setup()
   setValveIndicator(false);
 }
 
-void loop() {
-  
-  if (millis() - lastSendTime > interval) {
-    String message = "Message from LoL1n esp8266!";   // send a message
+void loop()
+{
+
+  if (millis() - lastSendTime > interval)
+  {
+    String message = "Message from LoL1n esp8266!"; // send a message
     sendString(message, &msgCount, localAddress, destination);
     Serial.println("Sending " + message);
     lastSendTime = millis();        // timestamp the message
@@ -378,7 +408,8 @@ void loop() {
   }
 
   // Periodically send sensor data to FastAPI
-  if (WiFi.isConnected() && (millis() - last_post_time) >= POST_INTERVAL) {
+  if (WiFi.isConnected() && (millis() - last_post_time) >= POST_INTERVAL)
+  {
     Serial.println("\n[LOOP] Sending sensor data...");
     sendSensorData();
     last_post_time = millis();
