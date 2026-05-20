@@ -1,43 +1,49 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional
 import sqlite3
 
 app = FastAPI(title="Frost Prevention API")
 
-
-#Dışarıdan gelen verilerin tipini kontrol et
-
+#artık çökmeyecek şekilde, ESP'den gelen verileri esnek bir şekilde karşılamak için Pydantic modeli oluşturuyoruz.
 class TelemetryData(BaseModel):
-    air_temperature: float
-    soil_temperature: float
-    soil_moisture: float
+    
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    pressure: Optional[float] = None
+    
+    air_temperature: Optional[float] = None
+    soil_temperature: Optional[float] = None
+    soil_moisture: Optional[float] = None
 
 class ValveControl(BaseModel):
     command: str
 
-#veritabanı bağlantı fonksiyonu
-
+# Veritabanı bağlantı fonksiyonu
 def get_db_connection():
     conn = sqlite3.connect('tarim_otomasyon.db')
     conn.row_factory = sqlite3.Row
     return conn
 
-
-# ENDPOINT 1: ESP'DEN SENSÖR VERİSİ ALMA (HTTP POST)
-
+# ESP'DEN SENSÖR VERİSİ ALMA
 @app.post("/api/esp/telemetry")
 def receive_telemetry(data: TelemetryData):
-
-    #Eğer ESP eksik veya hatalı veri gönderirse FastAPI otomatik olarak hata fırlatır.
     
-    hava_sicakligi = data.air_temperature
-    toprak_sicakligi = data.soil_temperature
-    toprak_nemi = data.soil_moisture
+    if data.temperature is not None:
+        hava_sicakligi = data.temperature
+     Civarındakiler= data.air_temperature if data.air_temperature is not None else 0.0
     
+    toprak_sicakligi = data.soil_temperature if data.soil_temperature is not None else 0.0
+    
+    if data.humidity is not None:
+        toprak_nemi = data.humidity
+    else:
+        toprak_nemi = data.soil_moisture if data.soil_moisture is not None else 0.0
+        
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    #Sensör verilerini tabloya kaydet
+    # Sensör verilerini mevcut veritabanı şemasına güvenle kaydet
     cursor.execute('''
         INSERT INTO sensor_verileri (hava_sicakligi, toprak_sicakligi, toprak_nemi)
         VALUES (?, ?, ?)
@@ -51,16 +57,14 @@ def receive_telemetry(data: TelemetryData):
     conn.commit()
     conn.close()
     
-    print(f"-> ESP Verisi Kaydedildi. Hava: {hava_sicakligi}°C | Vana Emri: {mevcut_emir}")
+    print(f"-> ESP Verisi Başarıyla İşlendi. Sıcaklık: {hava_sicakligi}°C | Nem: %{toprak_nemi} | Vana Emri: {mevcut_emir}")
     
     return {
         "status": "success",
         "valve_command": mevcut_emir
     }
 
-
-#HTTP GET İLE WEB SİTESİNE VERİ GÖNDERME
-
+# HTTP GET İLE WEB SİTESİNE VERİ GÖNDERME
 @app.get("/api/web/data")
 def get_web_data():
     conn = get_db_connection()
@@ -83,14 +87,12 @@ def get_web_data():
         "telemetry_history": veri_listesi
     }
 
-#HTTP POST İLE WEB SİTESİNDEN VANA EMRİ ALMA
-
+# HTTP POST İLE WEB SİTESİNDEN VANA EMRİ ALMA
 @app.post("/api/web/control")
 def control_valve(data: ValveControl):
     yeni_komut = data.command
     
     if yeni_komut not in ['OPEN', 'CLOSE']:
-        #HTTP 400 hatası döndürerek işlemi güvenle iptal eder
         raise HTTPException(status_code=400, detail="Gecersiz vana komutu")
         
     conn = get_db_connection()
