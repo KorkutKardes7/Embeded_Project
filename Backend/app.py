@@ -1,17 +1,56 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 import sqlite3
+import os
+from dotenv import load_dotenv  
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-app = FastAPI(title="Frost Prevention API")
+load_dotenv()
 
-#artık çökmeyecek şekilde, ESP'den gelen verileri esnek bir şekilde karşılamak için Pydantic modeli oluşturuyoruz.
+# Hugging Face anonim istek uyarısını engellemek için çevre değişkeni ayarı
+os.environ["HF_TOKEN"] = "ANONYMOUS"
+
+from google import genai
+
+app = FastAPI(title="Frost Prevention AI Powered API")
+
+# -------------------------------------------------------------
+#  RAG ve LLM KURULUMLARI 
+# -------------------------------------------------------------
+
+# ADIM 3: API Anahtarını elden yazmak yerine .env dosyasından gizlice çekiyoruz
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    print("⚠️ UYARI: GEMINI_API_KEY bulunamadı! .env dosyanızı ve anahtarınızı kontrol edin.")
+
+# Yeni GenAI Client Kurulumu
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# 2. ChromaDB Vektör Veritabanı Bağlantısı
+chromadb_path = "./chroma_db"
+chromadb_client = chromadb.PersistentClient(path=chromadb_path)
+
+# Türkçe performansı yüksek olan E5 embedding fonksiyonumuzu tanımlıyoruz
+embedding_fn = SentenceTransformerEmbeddingFunction(model_name="intfloat/multilingual-e5-base")
+
+# Koleksiyon bağlantısı
+collection = chromadb_client.get_or_create_collection(
+    name="tarim_ve_don_rehberi", 
+    embedding_function=embedding_fn
+)
+
+print("-> RAG Vektör Veritabanı ve Gemini Yapay Zekası Başarıyla Bağlandı.")
+
+# -------------------------------------------------------------
+#  VERI ŞABLONLARI
+# -------------------------------------------------------------
 class TelemetryData(BaseModel):
-    
     temperature: Optional[float] = None
     humidity: Optional[float] = None
     pressure: Optional[float] = None
-    
     air_temperature: Optional[float] = None
     soil_temperature: Optional[float] = None
     soil_moisture: Optional[float] = None
@@ -19,37 +58,32 @@ class TelemetryData(BaseModel):
 class ValveControl(BaseModel):
     command: str
 
+class ChatRequest(BaseModel):
+    user_message: str
+
 # Veritabanı bağlantı fonksiyonu
 def get_db_connection():
     conn = sqlite3.connect('tarim_otomasyon.db')
     conn.row_factory = sqlite3.Row
     return conn
 
-# ESP'DEN SENSÖR VERİSİ ALMA
+# -------------------------------------------------------------
+#  1. ENDPOINT: ESP'DEN SENSÖR VERİSİ ALMA (ARIZA ÖNLEMELİ)
+# -------------------------------------------------------------
 @app.post("/api/esp/telemetry")
 def receive_telemetry(data: TelemetryData):
-    
-    if data.temperature is not None:
-        hava_sicakligi = data.temperature
-     Civarındakiler= data.air_temperature if data.air_temperature is not None else 0.0
-    
+    hava_sicakligi = data.temperature if data.temperature is not None else (data.air_temperature if data.air_temperature is not None else 0.0)
     toprak_sicakligi = data.soil_temperature if data.soil_temperature is not None else 0.0
-    
-    if data.humidity is not None:
-        toprak_nemi = data.humidity
-    else:
-        toprak_nemi = data.soil_moisture if data.soil_moisture is not None else 0.0
+    toprak_nemi = data.humidity if data.humidity is not None else (data.soil_moisture if data.soil_moisture is not None else 0.0)
         
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Sensör verilerini mevcut veritabanı şemasına güvenle kaydet
     cursor.execute('''
         INSERT INTO sensor_verileri (hava_sicakligi, toprak_sicakligi, toprak_nemi)
         VALUES (?, ?, ?)
     ''', (hava_sicakligi, toprak_sicakligi, toprak_nemi))
     
-    # En son vana emrini veri tabanından oku
     cursor.execute('SELECT vana_durumu FROM sistem_kontrol ORDER BY id DESC LIMIT 1')
     kontrol_kaydi = cursor.fetchone()
     mevcut_emir = kontrol_kaydi['vana_durumu'] if kontrol_kaydi else 'CLOSE'
@@ -57,60 +91,102 @@ def receive_telemetry(data: TelemetryData):
     conn.commit()
     conn.close()
     
-    print(f"-> ESP Verisi Başarıyla İşlendi. Sıcaklık: {hava_sicakligi}°C | Nem: %{toprak_nemi} | Vana Emri: {mevcut_emir}")
+    print(f"-> ESP Verisi İşlendi | Sıcaklık: {hava_sicakligi}°C | Nem: %{toprak_nemi} | Vana Emri: {mevcut_emir}")
     
     return {
         "status": "success",
         "valve_command": mevcut_emir
     }
 
-# HTTP GET İLE WEB SİTESİNE VERİ GÖNDERME
+# -------------------------------------------------------------
+#  2. ENDPOINT: RAG TABANLI YAPAY ZEKA ZİRAAT DANIŞMANI CHATBOTU
+# -------------------------------------------------------------
+@app.post("/api/web/chat")
+def ai_agronomist_chat(data: ChatRequest):
+    try:
+        # Adım A: Çiftçinin mesajına göre ChromaDB'den ilgili PDF sayfalarını sorgula
+        results = collection.query(query_texts=[data.user_message], n_results=3)
+        retrieved_chunks = results['documents'][0] if results['documents'] else []
+        context_text = "\n---\n".join(retrieved_chunks)
+        
+        # Adım B: SQLite'tan tarlanın en son anlık sensör verilerini çek
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT hava_sicakligi, toprak_sicakligi, toprak_nemi FROM sensor_verileri ORDER BY id DESC LIMIT 1')
+        last_sensor = cursor.fetchone()
+        conn.close()
+        
+        air_t = last_sensor['hava_sicakligi'] if last_sensor else 20.0
+        soil_t = last_sensor['toprak_sicakligi'] if last_sensor else 15.0
+        soil_m = last_sensor['toprak_nemi'] if last_sensor else 50.0
+
+        # Adım C: Prompt oluşturma
+        prompt = f"""
+        Sen, otomatik don önleme sistemine entegre uzman bir Ziraat Mühendisliği Yapay Zeka Asistanısın (AI Agronomist).
+        Gorevin, ciftcinin sorusuna, saglanan kilavuz dokumanlara ve tarlanin canli sensor verilerine dayanarak kesin tavsiyeler vermektir.
+        
+        [TARLANIN CANLI SENSOR VERILERI]
+        - Hava Sicakligi: {air_t}°C
+        - Toprak Sicakligi: {soil_t}°C
+        - Toprak Nemi: %{soil_m}
+        
+        [REHBER DOKUMANLARDAN REFERANS BILGILER]
+        {context_text}
+        
+        [CIFTCININ SORUSU]
+        {data.user_message}
+        
+        Kurallar: 
+        1. Cevabini tamamen saglanan referans bilgilere dayandir, kafandan bilgi uydurma.
+        2. Canli sensor verilerinde don riski varsa (sicaklik sifira yakinsa) veya toprak nemi cok yuksekse sulama yapmamasi konusunda ciftciyi uyar.
+        3. Net, teknik ama samimi bir ziraat muhendisi dili kullan.
+        """
+        
+        # Güncel SDK ve gemini-2.5-flash modeli ile içerik üretimi
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+        )
+        
+        return {"status": "success", "response": response.text}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chatbot hatasi: {str(e)}")
+
+# -------------------------------------------------------------
+#  3. ENDPOINT: WEB SITESINE VERI GÖNDERME (GET)
+# -------------------------------------------------------------
 @app.get("/api/web/data")
 def get_web_data():
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Son 30 sensör verisini çek
     cursor.execute('SELECT * FROM sensor_verileri ORDER BY id DESC LIMIT 30')
     kayitlar = cursor.fetchall()
     
-    # Güncel vana durumunu çek
     cursor.execute('SELECT vana_durumu FROM sistem_kontrol ORDER BY id DESC LIMIT 1')
     kontrol_kaydi = cursor.fetchone()
     mevcut_emir = kontrol_kaydi['vana_durumu'] if kontrol_kaydi else 'CLOSE'
     conn.close()
     
-    veri_listesi = [dict(row) for row in kayitlar]
-    
-    return {
-        "valve_status": mevcut_emir,
-        "telemetry_history": veri_listesi
-    }
+    return {"valve_status": mevcut_emir, "telemetry_history": [dict(row) for row in kayitlar]}
 
-# HTTP POST İLE WEB SİTESİNDEN VANA EMRİ ALMA
+# -------------------------------------------------------------
+#  4. ENDPOINT: WEB SITESINDEN VANA EMRİ ALMA (POST)
+# -------------------------------------------------------------
 @app.post("/api/web/control")
 def control_valve(data: ValveControl):
     yeni_komut = data.command
-    
     if yeni_komut not in ['OPEN', 'CLOSE']:
         raise HTTPException(status_code=400, detail="Gecersiz vana komutu")
         
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE sistem_kontrol 
-        SET vana_durumu = ?, son_guncelleme = CURRENT_TIMESTAMP 
-        WHERE id = 1
-    ''', (yeni_komut,))
-    
+    cursor.execute('UPDATE sistem_kontrol SET vana_durumu = ?, son_guncelleme = CURRENT_TIMESTAMP WHERE id = 1', (yeni_komut,))
     conn.commit()
     conn.close()
     
-    print(f"-> Siteden yeni vana komutu alındı. Yeni Vana Durumu: {yeni_komut}")
-    return {
-        "status": "success", 
-        "updated_valve_status": yeni_komut
-    }
+    print(f"-> Siteden yeni vana komutu alindi: {yeni_komut}")
+    return {"status": "success", "updated_valve_status": yeni_komut}
 
 if __name__ == '__main__':
     import uvicorn
