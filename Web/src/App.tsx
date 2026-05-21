@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   CloudRain, 
   Droplets, 
@@ -22,22 +22,16 @@ import {
   Tooltip,
   ResponsiveContainer
 } from 'recharts';
+import ChatBot from './ChatBot';
 
 interface EdgeState {
   isConnected: boolean;
   airTemp: number;
   humidity: number;
   dewPoint: number;
-  soilMoisture: number;
   isValveOpen: boolean;
   isManualOverride: boolean;
 }
-
-const DUMMY_DATA = Array.from({ length: 24 }, (_, i) => ({
-  time: `${i}:00`,
-  temp: 20 + Math.sin(i / 3) * 5 + Math.random() * 2,
-  humidity: 60 + Math.cos(i / 4) * 15 + Math.random() * 5,
-}));
 
 export default function App() {
   const [state, setState] = useState<EdgeState>({
@@ -45,21 +39,74 @@ export default function App() {
     airTemp: 22.5,
     humidity: 65.0,
     dewPoint: 15.2,
-    soilMoisture: 72.0,
     isValveOpen: false,
     isManualOverride: false
   });
 
+  const [historyData, setHistoryData] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const response = await fetch('/api/web/data');
+        if (!response.ok) throw new Error('Network error');
+        const data = await response.json();
+        
+        if (data.telemetry_history && data.telemetry_history.length > 0) {
+          const latest = data.telemetry_history[0];
+          
+          setState(s => ({
+            ...s,
+            airTemp: latest.hava_sicakligi || 0,
+            humidity: latest.toprak_nemi || 0,
+            dewPoint: latest.hava_sicakligi - ((100 - (latest.toprak_nemi || 0)) / 5), // rough dew point estimation
+            isValveOpen: data.valve_status === 'OPEN',
+            isConnected: true
+          }));
+
+          const chartData = [...data.telemetry_history].reverse().map((item: any) => ({
+            time: new Date(item.olcum_zamani).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+            temp: item.hava_sicakligi,
+            humidity: item.toprak_nemi
+          }));
+          setHistoryData(chartData);
+        } else {
+          // If no data yet, wait
+          setState(s => ({ ...s, isConnected: true }));
+        }
+      } catch (error) {
+        console.error('Failed to fetch telemetry:', error);
+        setState(s => ({ ...s, isConnected: false }));
+      }
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   const isFrostWarning = state.airTemp <= 1.0;
   const isDewPointWarning = state.airTemp < state.dewPoint && state.airTemp < 2.0;
-  const isDrowningRisk = state.soilMoisture >= 95.0;
 
-  const toggleOverride = () => {
-    setState(s => ({
-      ...s,
-      isManualOverride: true,
-      isValveOpen: !s.isValveOpen
-    }));
+  const toggleOverride = async () => {
+    const newValveState = !state.isValveOpen;
+    const command = newValveState ? 'OPEN' : 'CLOSE';
+    
+    try {
+      await fetch('/api/web/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command }),
+      });
+      
+      setState(s => ({
+        ...s,
+        isManualOverride: true,
+        isValveOpen: newValveState
+      }));
+    } catch (error) {
+      console.error('Error changing valve state:', error);
+    }
   };
 
   const toggleConnection = () => {
@@ -106,7 +153,7 @@ export default function App() {
         <div className="p-6 lg:p-10 max-w-7xl mx-auto w-full space-y-8">
           
           {/* Metrics Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             <MetricCard 
               icon={<Thermometer className="w-6 h-6 text-orange-500" />}
               title="Air Temperature"
@@ -126,13 +173,6 @@ export default function App() {
               value={`${state.dewPoint.toFixed(1)}°C`}
               warning={isDewPointWarning ? 'Dew Point Risk' : null}
               statusColor="bg-indigo-500"
-            />
-            <MetricCard 
-              icon={<CloudRain className="w-6 h-6 text-emerald-500" />}
-              title="Soil Moisture"
-              value={`${state.soilMoisture.toFixed(1)}%`}
-              warning={isDrowningRisk ? 'Drowning Risk High' : null}
-              statusColor="bg-emerald-500"
             />
           </div>
 
@@ -176,7 +216,7 @@ export default function App() {
               <h3 className="text-lg font-bold text-slate-800 mb-6">Environment Trends (24h)</h3>
               <div className="h-64 mt-4">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={DUMMY_DATA} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
+                  <AreaChart data={historyData} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
                     <defs>
                       <linearGradient id="colorTemp" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#f97316" stopOpacity={0.2}/>
@@ -204,6 +244,7 @@ export default function App() {
           </div>
         </div>
       </main>
+      <ChatBot />
     </div>
   );
 }
