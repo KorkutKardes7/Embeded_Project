@@ -57,6 +57,7 @@ class TelemetryData(BaseModel):
 
 class ValveControl(BaseModel):
     command: str
+    mode: Optional[str] = None
 
 class ChatRequest(BaseModel):
     user_message: str
@@ -74,24 +75,42 @@ def get_db_connection():
 def receive_telemetry(data: TelemetryData):
     hava_sicakligi = data.temperature if data.temperature is not None else (data.air_temperature if data.air_temperature is not None else 0.0)
     toprak_sicakligi = data.soil_temperature if data.soil_temperature is not None else 0.0
-    toprak_nemi = data.humidity if data.humidity is not None else (data.soil_moisture if data.soil_moisture is not None else 0.0)
+    hava_nemi = data.humidity if data.humidity is not None else 0.0
+    hava_basinci = data.pressure if data.pressure is not None else 0.0
         
     conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute('''
-        INSERT INTO sensor_verileri (hava_sicakligi, toprak_sicakligi, toprak_nemi)
-        VALUES (?, ?, ?)
-    ''', (hava_sicakligi, toprak_sicakligi, toprak_nemi))
+        INSERT INTO sensor_verileri (hava_sicakligi, toprak_sicakligi, hava_nemi, hava_basinci)
+        VALUES (?, ?, ?, ?)
+    ''', (hava_sicakligi, toprak_sicakligi, hava_nemi, hava_basinci))
     
-    cursor.execute('SELECT vana_durumu FROM sistem_kontrol ORDER BY id DESC LIMIT 1')
+    cursor.execute('SELECT vana_durumu, mod FROM sistem_kontrol ORDER BY id DESC LIMIT 1')
     kontrol_kaydi = cursor.fetchone()
     mevcut_emir = kontrol_kaydi['vana_durumu'] if kontrol_kaydi else 'CLOSE'
+    aktif_mod = kontrol_kaydi['mod'] if (kontrol_kaydi and 'mod' in kontrol_kaydi.keys()) else 'AUTO'
     
+    # Calculate dew point (matching frontend approximation logic)
+    dew_point = hava_sicakligi - abs(1050 - hava_basinci) / 10.0
+
+    # Auto-valve logic based on critical temperatures for frost prevention
+    if aktif_mod == 'AUTO':
+        if hava_sicakligi <= dew_point + 1.5: # Critical threshold
+            if mevcut_emir != 'OPEN':
+                mevcut_emir = 'OPEN'
+                cursor.execute('UPDATE sistem_kontrol SET vana_durumu = ?, son_guncelleme = CURRENT_TIMESTAMP WHERE id = 1', ('OPEN',))
+                print(f"❄️  FROST WARNING: Temp ({hava_sicakligi}°C) is close to Dew Point ({dew_point:.1f}°C). Auto-opening valve!")
+        elif hava_sicakligi > dew_point + 3.0: # Safe threshold to close the valve
+            if mevcut_emir == 'OPEN':
+                mevcut_emir = 'CLOSE'
+                cursor.execute('UPDATE sistem_kontrol SET vana_durumu = ?, son_guncelleme = CURRENT_TIMESTAMP WHERE id = 1', ('CLOSE',))
+                print(f"☀️  TEMPERATURE SAFE: Temp ({hava_sicakligi}°C) is safely above dew point. Auto-closing valve.")
+
     conn.commit()
     conn.close()
     
-    print(f"-> ESP Verisi İşlendi | Sıcaklık: {hava_sicakligi}°C | Nem: %{toprak_nemi} | Vana Emri: {mevcut_emir}")
+    print(f"-> ESP Verisi İşlendi | Sıcaklık: {hava_sicakligi}°C | Hava Nemi: %{hava_nemi} | Vana Emri: {mevcut_emir}")
     
     return {
         "status": "success",
@@ -112,13 +131,15 @@ def ai_agronomist_chat(data: ChatRequest):
         # Adım B: SQLite'tan tarlanın en son anlık sensör verilerini çek
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT hava_sicakligi, toprak_sicakligi, toprak_nemi FROM sensor_verileri ORDER BY id DESC LIMIT 1')
+        cursor.execute('SELECT hava_sicakligi, toprak_sicakligi, toprak_nemi, hava_basinci, hava_nemi FROM sensor_verileri ORDER BY id DESC LIMIT 1')
         last_sensor = cursor.fetchone()
         conn.close()
         
         air_t = last_sensor['hava_sicakligi'] if last_sensor else 20.0
         soil_t = last_sensor['toprak_sicakligi'] if last_sensor else 15.0
         soil_m = last_sensor['toprak_nemi'] if last_sensor else 50.0
+        air_p = last_sensor['hava_basinci'] if last_sensor else 1013.25
+        air_h = last_sensor['hava_nemi'] if last_sensor else 50.0
 
         # Adım C: Prompt oluşturma
         prompt = f"""
@@ -127,6 +148,8 @@ def ai_agronomist_chat(data: ChatRequest):
         
         [TARLANIN CANLI SENSOR VERILERI]
         - Hava Sicakligi: {air_t}°C
+        - Hava Nemi: %{air_h}
+        - Hava Basinci: {air_p} hPa
         - Toprak Sicakligi: {soil_t}°C
         - Toprak Nemi: %{soil_m}
         
@@ -163,12 +186,17 @@ def get_web_data():
     cursor.execute('SELECT * FROM sensor_verileri ORDER BY id DESC LIMIT 30')
     kayitlar = cursor.fetchall()
     
-    cursor.execute('SELECT vana_durumu FROM sistem_kontrol ORDER BY id DESC LIMIT 1')
+    cursor.execute('SELECT vana_durumu, mod FROM sistem_kontrol ORDER BY id DESC LIMIT 1')
     kontrol_kaydi = cursor.fetchone()
     mevcut_emir = kontrol_kaydi['vana_durumu'] if kontrol_kaydi else 'CLOSE'
+    aktif_mod = kontrol_kaydi['mod'] if (kontrol_kaydi and 'mod' in kontrol_kaydi.keys()) else 'AUTO'
     conn.close()
     
-    return {"valve_status": mevcut_emir, "telemetry_history": [dict(row) for row in kayitlar]}
+    return {
+        "valve_status": mevcut_emir,
+        "mode": aktif_mod,
+        "telemetry_history": [dict(row) for row in kayitlar]
+    }
 
 # -------------------------------------------------------------
 #  4. ENDPOINT: WEB SITESINDEN VANA EMRİ ALMA (POST)
@@ -176,16 +204,22 @@ def get_web_data():
 @app.post("/api/web/control")
 def control_valve(data: ValveControl):
     yeni_komut = data.command
-    if yeni_komut not in ['OPEN', 'CLOSE']:
+    if yeni_komut not in ['OPEN', 'CLOSE', 'AUTO']:
         raise HTTPException(status_code=400, detail="Gecersiz vana komutu")
         
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('UPDATE sistem_kontrol SET vana_durumu = ?, son_guncelleme = CURRENT_TIMESTAMP WHERE id = 1', (yeni_komut,))
+    
+    if yeni_komut == 'AUTO':
+        cursor.execute('UPDATE sistem_kontrol SET mod = ?, son_guncelleme = CURRENT_TIMESTAMP WHERE id = 1', ('AUTO',))
+        print("-> Siteden AUTO modu aktifleştirildi.")
+    else:
+        # If manually toggling the valve, force the mode to MANUAL
+        cursor.execute('UPDATE sistem_kontrol SET vana_durumu = ?, mod = ?, son_guncelleme = CURRENT_TIMESTAMP WHERE id = 1', (yeni_komut, 'MANUAL'))
+        print(f"-> Siteden yeni vana komutu alindi: {yeni_komut} (MANUAL Override)")
+        
     conn.commit()
     conn.close()
-    
-    print(f"-> Siteden yeni vana komutu alindi: {yeni_komut}")
     return {"status": "success", "updated_valve_status": yeni_komut}
 
 if __name__ == '__main__':

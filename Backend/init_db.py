@@ -11,7 +11,8 @@ def kur_veritabanı():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             hava_sicakligi REAL,
             toprak_sicakligi REAL,
-            toprak_nemi REAL
+            toprak_nemi REAL,
+            hava_basinci REAL
         )
     ''')
     
@@ -20,14 +21,15 @@ def kur_veritabanı():
         CREATE TABLE IF NOT EXISTS sistem_kontrol (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             vana_durumu TEXT DEFAULT 'CLOSE',
+            mod TEXT DEFAULT 'AUTO',
             son_guncelleme DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
-    # Başlangıçta vana durumunu 'CLOSE' (Kapalı) olarak ekleyelim (Eğer tablo boşsa)
+    # Başlangıçta vana durumunu 'CLOSE' ve modu 'AUTO' olarak ekleyelim (Eğer tablo boşsa)
     cursor.execute('SELECT COUNT(*) FROM sistem_kontrol')
     if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO sistem_kontrol (vana_durumu) VALUES ('CLOSE')")
+        cursor.execute("INSERT INTO sistem_kontrol (vana_durumu, mod) VALUES ('CLOSE', 'AUTO')")
     
     conn.commit()
     conn.close()

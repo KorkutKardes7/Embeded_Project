@@ -10,7 +10,6 @@ import {
   Wifi,
   WifiOff,
   Activity,
-  Settings,
   Leaf
 } from 'lucide-react';
 import {
@@ -20,7 +19,8 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer
+  ResponsiveContainer,
+  Legend
 } from 'recharts';
 import ChatBot from './ChatBot';
 
@@ -28,6 +28,7 @@ interface EdgeState {
   isConnected: boolean;
   airTemp: number;
   humidity: number;
+  pressure: number;
   dewPoint: number;
   isValveOpen: boolean;
   isManualOverride: boolean;
@@ -35,9 +36,10 @@ interface EdgeState {
 
 export default function App() {
   const [state, setState] = useState<EdgeState>({
-    isConnected: true,
-    airTemp: 22.5,
-    humidity: 65.0,
+    isConnected: false,
+    airTemp: 0,
+    humidity: 0,
+    pressure: 1013.25,
     dewPoint: 15.2,
     isValveOpen: false,
     isManualOverride: false
@@ -58,16 +60,19 @@ export default function App() {
           setState(s => ({
             ...s,
             airTemp: latest.hava_sicakligi || 0,
-            humidity: latest.toprak_nemi || 0,
-            dewPoint: latest.hava_sicakligi - ((100 - (latest.toprak_nemi || 0)) / 5), // rough dew point estimation
+            humidity: latest.hava_nemi || 0,
+            pressure: latest.hava_basinci || 1000,
+            dewPoint: (latest.hava_sicakligi || 0) - Math.abs(1050 - (latest.hava_basinci || 1000)) / 10,
             isValveOpen: data.valve_status === 'OPEN',
+            isManualOverride: data.mode === 'MANUAL',
             isConnected: true
           }));
 
           const chartData = [...data.telemetry_history].reverse().map((item: any) => ({
-            time: new Date(item.olcum_zamani).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+            id: item.id,
             temp: item.hava_sicakligi,
-            humidity: item.toprak_nemi
+            humidity: item.hava_nemi,
+            pressure: item.hava_basinci
           }));
           setHistoryData(chartData);
         } else {
@@ -85,8 +90,8 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const isFrostWarning = state.airTemp <= 1.0;
-  const isDewPointWarning = state.airTemp < state.dewPoint && state.airTemp < 2.0;
+  const isFrostWarning = state.airTemp <= state.dewPoint + 1.5; // Warning when close to dew point
+  const isDewPointWarning = state.airTemp <= state.dewPoint + 1.5;
 
   const toggleOverride = async () => {
     const newValveState = !state.isValveOpen;
@@ -126,10 +131,6 @@ export default function App() {
             <Activity className="w-5 h-5" />
             <span className="font-medium hidden lg:block">Dashboard</span>
           </button>
-          <button className="flex items-center gap-3 px-3 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors">
-            <Settings className="w-5 h-5" />
-            <span className="font-medium hidden lg:block">Settings</span>
-          </button>
         </nav>
       </aside>
 
@@ -153,7 +154,7 @@ export default function App() {
         <div className="p-6 lg:p-10 max-w-7xl mx-auto w-full space-y-8">
           
           {/* Metrics Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             <MetricCard 
               icon={<Thermometer className="w-6 h-6 text-orange-500" />}
               title="Air Temperature"
@@ -162,10 +163,16 @@ export default function App() {
               statusColor="bg-orange-500"
             />
             <MetricCard 
-              icon={<Wind className="w-6 h-6 text-sky-500" />}
+              icon={<CloudRain className="w-6 h-6 text-sky-500" />}
               title="Air Humidity"
               value={`${state.humidity.toFixed(1)}%`}
               statusColor="bg-sky-500"
+            />
+            <MetricCard 
+              icon={<Wind className="w-6 h-6 text-purple-500" />}
+              title="Air Pressure"
+              value={`${state.pressure.toFixed(1)} hPa`}
+              statusColor="bg-purple-500"
             />
             <MetricCard 
               icon={<Droplets className="w-6 h-6 text-indigo-500" />}
@@ -203,7 +210,14 @@ export default function App() {
 
               {state.isManualOverride && (
                 <button 
-                  onClick={() => setState(s => ({ ...s, isManualOverride: false }))}
+                  onClick={async () => {
+                    await fetch('/api/web/control', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ command: 'AUTO' }),
+                    });
+                    setState(s => ({ ...s, isManualOverride: false }))
+                  }}
                   className="w-full py-3 px-4 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-700 font-semibold rounded-xl transition-all shadow-sm text-sm"
                 >
                   Restore Automatic Control
@@ -213,7 +227,7 @@ export default function App() {
 
             {/* Historical Chart */}
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 lg:col-span-2">
-              <h3 className="text-lg font-bold text-slate-800 mb-6">Environment Trends (24h)</h3>
+              <h3 className="text-lg font-bold text-slate-800 mb-6">Recent Telemetry</h3>
               <div className="h-64 mt-4">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={historyData} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
@@ -226,17 +240,23 @@ export default function App() {
                         <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.2}/>
                         <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0}/>
                       </linearGradient>
+                      <linearGradient id="colorPres" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
+                      </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} dy={10} />
-                    <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
-                    <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
+                    <XAxis dataKey="id" axisLine={false} tickLine={false} tick={false} />
+                    <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={false} domain={['auto', 'auto']} />
+                    <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={false} domain={['auto', 'auto']} />
                     <Tooltip 
                       contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)' }}
-                      labelStyle={{ color: '#64748b', fontWeight: 600, marginBottom: '4px' }}
+                      labelStyle={{ display: 'none' }}
                     />
-                    <Area yAxisId="left" type="monotone" dataKey="temp" stroke="#f97316" strokeWidth={3} fillOpacity={1} fill="url(#colorTemp)" name="Temp (°C)" />
-                    <Area yAxisId="right" type="monotone" dataKey="humidity" stroke="#0ea5e9" strokeWidth={3} fillOpacity={1} fill="url(#colorHum)" name="Humidity (%)" />
+                    <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                    <Area yAxisId="left" type="monotone" dataKey="temp" stroke="#f97316" strokeWidth={3} fillOpacity={1} fill="url(#colorTemp)" dot={{ r: 4, fill: '#f97316' }} activeDot={{ r: 6 }} name="Temp (°C)" />
+                    <Area yAxisId="left" type="monotone" dataKey="humidity" stroke="#0ea5e9" strokeWidth={3} fillOpacity={1} fill="url(#colorHum)" dot={{ r: 4, fill: '#0ea5e9' }} activeDot={{ r: 6 }} name="Humidity (%)" />
+                    <Area yAxisId="right" type="monotone" dataKey="pressure" stroke="#8b5cf6" strokeWidth={3} fillOpacity={1} fill="url(#colorPres)" dot={{ r: 4, fill: '#8b5cf6' }} activeDot={{ r: 6 }} name="Pressure (hPa)" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
