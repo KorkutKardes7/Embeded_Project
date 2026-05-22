@@ -10,6 +10,7 @@ def kur_veritabanı():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             hava_sicakligi REAL,
+            hava_nemi REAL,
             toprak_sicakligi REAL,
             toprak_nemi REAL,
             hava_basinci REAL
