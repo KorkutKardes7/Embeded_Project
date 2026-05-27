@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-dotenv
+chromadb
+PyPDF2
+langchain-text-splitters
+sentence-transformers
+gradio
+requests
+pydantic
+google-genai
